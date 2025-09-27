@@ -29,7 +29,6 @@ function scoreText(s="") {
   for (const w of words){ if (POS.has(w)) pos++; if (NEG.has(w)) neg++; }
   return pos - neg;
 }
-
 function fallbackSentimentFromNews(rows) {
   if (!rows || !rows.length) return null;
   let posCount=0, negCount=0, neuCount=0;
@@ -42,8 +41,8 @@ function fallbackSentimentFromNews(rows) {
   const bullishPercent = (posCount / total) * 100;
   const bearishPercent = (negCount / total) * 100;
   const articlesInLastWeek = rows.length;
-  const weeklyAverage = 20; // simple baseline so Buzz has context
-  const buzz = Math.min(3, articlesInLastWeek / weeklyAverage) * 100 / 3 * 100 / 100; // scaled 0–100
+  const weeklyAverage = 20; // simple baseline for context
+  const buzz = Math.min(3, articlesInLastWeek / weeklyAverage) * (100/3);
   return {
     buzz: { articlesInLastWeek, weeklyAverage, buzz },
     sentiment: { bullishPercent, bearishPercent }
@@ -111,19 +110,36 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
-/* ---------------- Header (tidy, responsive) ---------------- */
-function Header({ dark, setDark, openTips, openAbout, openContact }) {
+/* ---------------- Brand mark (SVG) ---------------- */
+function CandlMark({ size = 34 }) {
+  return (
+    <img
+      src={process.env.PUBLIC_URL + "/candl.svg"}
+      alt="CandL"
+      width={size}
+      height={size}
+      className="brand-svg"
+      draggable="false"
+    />
+  );
+}
+
+/* ---------------- Header (with Install button) ---------------- */
+function Header({ dark, setDark, openTips, openAbout, openContact, canInstall, onInstall }) {
   return (
     <header className="fixed-header">
       <div className="header-inner">
         <div className="brand">
-          <div className="brand-mark">C</div>
+          <div className="brand-mark"><CandlMark size={34} /></div>
           <div className="brand-text">
             <div className="brand-big">CandL</div>
             <div className="brand-small">Stock Analyser</div>
           </div>
         </div>
         <nav className="header-actions" aria-label="primary">
+          {canInstall && (
+            <button className="btn ghost hide-xs" onClick={onInstall} title="Install app">Install</button>
+          )}
           <button className="btn ghost icon" onClick={() => setDark(d => !d)} aria-label="Toggle theme">
             {dark ? "🌙" : "☀️"}
           </button>
@@ -259,6 +275,30 @@ export default function App() {
     write("ui:dark", dark);
   }, [dark]);
 
+  // PWA install: capture event + show CTA (header + toast)
+  const [installEvent, setInstallEvent] = useState(null);
+  const [showInstallToast, setShowInstallToast] = useState(() => !read("pwa:toast-dismissed", false));
+  const canInstall = !!installEvent;
+
+  useEffect(() => {
+    const onBefore = (e) => { e.preventDefault(); setInstallEvent(e); };
+    const onInstalled = () => { setInstallEvent(null); setShowInstallToast(false); };
+    window.addEventListener("beforeinstallprompt", onBefore);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBefore);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const triggerInstall = async () => {
+    if (!installEvent) return;
+    installEvent.prompt();
+    try { await installEvent.userChoice; } catch {}
+    setInstallEvent(null);
+  };
+  const dismissInstallToast = () => { setShowInstallToast(false); write("pwa:toast-dismissed", true); };
+
   // modals
   const [aboutOpen, setAboutOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
@@ -332,29 +372,20 @@ export default function App() {
         const resp = await fetch(`https://finnhub.io/api/v1/news-sentiment?symbol=${sym}&token=${FINN}`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const js = await resp.json();
-        // check if data is meaningful
         const hasBull = Number.isFinite(js?.sentiment?.bullishPercent);
         const hasBear = Number.isFinite(js?.sentiment?.bearishPercent);
         const hasBuzz = Number.isFinite(js?.buzz?.articlesInLastWeek);
-        if (hasBull || hasBear || hasBuzz) {
-          sentData = js;
-        }
-      } catch (e) {
-        // keep sentData = null; will fallback below
-      }
+        if (hasBull || hasBear || hasBuzz) sentData = js;
+      } catch {}
 
-      // Fallback: derive from headlines if Finnhub returns empty/weak
+      // Fallback from headlines if needed
       if (!sentData || (!sentData.sentiment && !sentData.buzz)) {
         const fb = fallbackSentimentFromNews(dedup);
-        if (fb) {
-          sentData = fb;
-        } else {
-          setSentimentError("Sentiment unavailable right now. Try again in a minute.");
-        }
+        if (fb) sentData = fb; else setSentimentError("Sentiment unavailable right now. Try again in a minute.");
       }
 
       setSentiment(sentData || null);
-      setTab("sentiment"); // jump user straight to sentiment after analyze
+      setTab("sentiment"); // jump to sentiment after analyze
       // deep link
       const p = new URLSearchParams(window.location.search);
       p.set("s", sym); window.history.replaceState({}, "", `?${p.toString()}`);
@@ -379,6 +410,15 @@ export default function App() {
   // auto-load deep link if provided
   useEffect(() => { if (initialS) analyze(); /* eslint-disable-next-line */ }, []);
 
+  /* simple inline styles for the install toast (so you don't need extra CSS) */
+  const toastStyle = {
+    position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 100,
+    display: (canInstall && showInstallToast) ? "grid" : "none",
+    gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center",
+    padding: "10px 12px", borderRadius: 12,
+    background: "var(--surface)", border: "1px solid var(--outline)", boxShadow: "var(--shadow)"
+  };
+
   return (
     <>
       {/* Frosted animated backdrop */}
@@ -391,8 +431,21 @@ export default function App() {
         openTips={() => setTipsOpen(true)}
         openAbout={() => setAboutOpen(true)}
         openContact={() => setContactOpen(true)}
+        canInstall={canInstall}
+        onInstall={triggerInstall}
       />
       <TradingViewTape dark={dark} />
+
+      {/* Install toast (polite, one-time per device) */}
+      <div style={toastStyle} role="dialog" aria-live="polite">
+        <div className="muted">
+          Install <strong>CandL</strong> for a faster, full-screen experience.
+        </div>
+        <div style={{display:"flex", gap:8}}>
+          <button className="btn sm" onClick={triggerInstall}>Install</button>
+          <button className="btn ghost sm" onClick={dismissInstallToast}>Not now</button>
+        </div>
+      </div>
 
       {/* Main */}
       <main className="page-under-fixed">
@@ -475,7 +528,7 @@ export default function App() {
       <Modal open={aboutOpen} onClose={() => setAboutOpen(false)} title="About CandL">
         <p><strong>CandL</strong> is a mobile-first stock analyser focused on clarity, speed, and accessibility.</p>
         <p>Enter a supported ticker to see a real-time snapshot, sentiment mix from recent news, and curated headlines.
-           Use the tabs to switch views. The theme toggle adapts the UI and the market tape.</p>
+           Use the tabs to switch views. Theme toggle adapts the UI and the market tape.</p>
         <p>Share links like <code>?s=AAPL</code> to open directly. Your API key is stored securely as an environment variable.</p>
         <p className="muted">Design: frosted glass panels over a calm animated canvas; compact controls and readable type for small screens.</p>
       </Modal>

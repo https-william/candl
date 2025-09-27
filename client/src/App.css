@@ -246,3 +246,35 @@ html[data-theme="dark"]{
   .btn{ height: 36px; padding: 0 10px }
   .contact-cta{ max-width: 140px }
 }
+/* --- Brand uses the SVG (no overflow, perfect centering) --- */
+.brand-mark{
+  width: 34px; height: 34px; border-radius: 9px;
+  display: grid; place-items: center;
+  background: transparent; /* remove gradient box */
+  box-shadow: none;        /* no heavy shadow behind the logo */
+}
+.brand-svg{
+  width: 100%; height: 100%;
+  border-radius: 50%;
+}
+
+/* Better spacing/alignment for header on small screens */
+.header-inner{
+  max-width: 1200px; height: 100%; margin: 0 auto; padding: 0 12px;
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+}
+.brand{ display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center }
+.brand-text{ display: grid; gap: 0 }
+.brand-big{ font-weight: 800; font-size: clamp(16px, 4vw, 22px) }
+.brand-small{ font-weight: 600; font-size: clamp(12px, 3.2vw, 13px); color: var(--muted) }
+
+.header-actions{ display: flex; gap: 8px; align-items: center }
+.btn.icon{ width: 36px; height: 36px; padding: 0; justify-content: center }
+.contact-cta{ max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+/* Keep tape small on phones */
+.tv-wrap{ --tvScale: 0.90; height: var(--tapeH); overflow: hidden }
+.tv-wrap .tradingview-widget-container__widget{
+  transform: scale(var(--tvScale)); transform-origin: top left; width: calc(100% / var(--tvScale));
+}
+@media (min-width: 640px){ .tv-wrap{ --tvScale: 1 } }
