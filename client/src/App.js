@@ -161,7 +161,7 @@ function AppInner() {
   const [lastUpdated, setLastUpdated] = useState(null);
 
   const [tab, setTab] = useState("Snapshot");
-  const [tipsOpen, setTipsOpen] = useState(() => read("tips:open", true));
+  const [tipsOpen, setTipsOpen] = useState(() => read("tips:open", false));
 
   const [openModal, setOpenModal] = useState(null); // 'legal' | 'about' | 'contact'
   const [modalTab, setModalTab] = useState("Terms");
@@ -374,7 +374,7 @@ function AppInner() {
       </div>
 
       {/* ===== TradingView tape (fixed, full-width) ===== */}
-      <TradingViewTape symbols={DEFAULT_SET} themeDark={dark} />
+      <TradingViewTape key={dark ? "tv-dark" : "tv-light"} symbols={DEFAULT_SET} themeDark={dark} />
 
       {/* ===== Body under fixed bars ===== */}
       <div className="page-under-fixed">

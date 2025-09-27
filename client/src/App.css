@@ -1421,3 +1421,99 @@ a, .linklike { color: var(--brand); }
 @media (max-width: 360px){
   .logo-text{ font-size: 20px; }
 }
+/* ===== Mobile polish for CandL ===== */
+
+/* Safer defaults */
+:root{
+  --hdr-h: 72px;              /* desktop header height */
+  --tape-h: 32px;             /* tradingview tape height */
+  --page-pad: calc(var(--hdr-h) + var(--tape-h) + 16px);
+}
+
+/* Layout under fixed bars */
+.page-under-fixed{
+  padding-top: var(--page-pad);
+}
+
+/* Full-width header + compact actions */
+.fixed-header{
+  position: fixed; inset: 0 0 auto 0; z-index: 50;
+  background: var(--surface); border-bottom: 1px solid var(--outline);
+}
+.header-inner{
+  max-width: 1200px; margin: 0 auto; padding: 10px 12px;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
+}
+.logo-text{ font-size: clamp(18px, 4vw, 28px); line-height: 1.1; }
+
+/* Action buttons */
+.header-actions{ display: flex; gap: 8px; align-items: center; }
+.header-actions .button,
+.header-actions .button--primary{ height: 36px; padding: 0 12px; }
+
+/* Icon-only on small screens */
+.tip-bulb span{ margin-left: 6px; }
+@media (max-width: 640px){
+  :root{ --hdr-h: 56px; --tape-h: 28px; --page-pad: calc(var(--hdr-h) + var(--tape-h) + 12px); }
+  .header-inner{ padding: 8px 10px; }
+  .logo-text{ font-size: 18px; }
+  .tip-bulb span{ display: none; }               /* hide "Tips" text, keep bulb */
+  .header-actions .header-link{ display: none; } /* hide “About” text button on mobile */
+  .contact-cta{ padding: 0 10px; font-size: 13px; }
+}
+
+/* TradingView tape pinned under header (full width) */
+.fixed-tape{
+  position: fixed; left: 0; right: 0; top: var(--hdr-h); z-index: 40;
+  background: transparent; min-height: var(--tape-h);
+  display: block;
+}
+
+/* Search + suggest panel spacing */
+.input-group{ margin-top: 12px; }
+.input-field{ width: 100%; }
+
+/* Tabs more prominent + scrollable on mobile */
+.seg-tabs.seg-tabs--prominent{
+  margin: 14px 0; gap: 8px; overflow-x: auto;
+}
+.seg-tabs .seg--lg{
+  padding: 8px 14px; border-radius: 999px; font-weight: 600;
+  border: 1px solid var(--outline);
+}
+.seg-tabs .seg--lg.is-active{
+  background: color-mix(in hsl, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+}
+
+/* Cards stack nicely */
+.market-grid{ display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+@media (max-width: 900px){ .market-grid{ grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 640px){ .market-grid{ grid-template-columns: 1fr; } }
+
+.news-grid-5x2{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+@media (max-width: 1024px){ .news-grid-5x2{ grid-template-columns: repeat(3,1fr); } }
+@media (max-width: 640px){ .news-grid-5x2{ grid-template-columns: 1fr; } }
+
+.heat-grid{ display: grid; grid-template-columns: repeat(6,1fr); gap: 8px; }
+@media (max-width: 1024px){ .heat-grid{ grid-template-columns: repeat(4,1fr); } }
+@media (max-width: 640px){ .heat-grid{ grid-template-columns: repeat(2,1fr); } }
+
+/* Footer full width, stack on mobile */
+.footer-outer{ background: var(--surfaceElev); border-top: 1px solid var(--outline); }
+.site-footer{ max-width: 1200px; margin: 0 auto; padding: 14px 12px;
+  display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+@media (max-width: 640px){
+  .site-footer{ flex-direction: column; align-items: stretch; gap: 10px; }
+  .footer-actions{ display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+}
+
+/* Sticky actions feel better on mobile */
+.button, .button--ghost, .button--primary{
+  min-height: 40px; border-radius: 10px;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.button:active{ transform: scale(0.98); }
+
+/* Ensure body text stays readable on both themes */
+body, .description, .subtitle, .muted { color: var(--text); }
