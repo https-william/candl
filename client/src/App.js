@@ -1,33 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
-/* -------------------------------------------------------
-   Tiny utils
-------------------------------------------------------- */
-const read = (k, f) => {
-  try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : f; } catch { return f; }
-};
+/* ---------------- utils ---------------- */
+const read = (k, f) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : f; } catch { return f; } };
 const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-const usd = (n) =>
-  typeof n === "number" ? n.toLocaleString(undefined, { style: "currency", currency: "USD" }) : "—";
+const usd = (n) => (typeof n === "number" ? n.toLocaleString(undefined, { style: "currency", currency: "USD" }) : "—");
 const pad2 = (n) => String(n).padStart(2, "0");
 const isoDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-
 const FINN = process.env.REACT_APP_FINNHUB_KEY || "";
 
-/* -------------------------------------------------------
-   TradingView tape (remounts on theme, opaque bg)
-------------------------------------------------------- */
+/* ---------------- TradingView (scaled + opaque) ---------------- */
 function TradingViewTape({ dark }) {
   const ref = useRef(null);
-
   useEffect(() => {
     if (!ref.current) return;
     ref.current.innerHTML = "";
-
     const s = document.createElement("script");
-    s.src =
-      "https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js";
+    s.src = "https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js";
     s.async = true;
     s.innerHTML = JSON.stringify({
       symbols: [
@@ -41,27 +30,26 @@ function TradingViewTape({ dark }) {
       ],
       showSymbolLogo: true,
       colorTheme: dark ? "dark" : "light",
-      isTransparent: false,                 // <- not transparent anymore
+      isTransparent: false,      // opaque so it doesn’t look “see-through”
       displayMode: "adaptive",
       locale: "en"
     });
-
     ref.current.appendChild(s);
     return () => { if (ref.current) ref.current.innerHTML = ""; };
   }, [dark]);
 
   return (
     <div className="fixed-tape">
-      <div className="tradingview-widget-container tv-opaque">
-        <div className="tradingview-widget-container__widget" ref={ref} />
+      <div className="tv-wrap">
+        <div className="tradingview-widget-container tv-opaque">
+          <div className="tradingview-widget-container__widget" ref={ref} />
+        </div>
       </div>
     </div>
   );
 }
 
-/* -------------------------------------------------------
-   Modal (glass) with body-scroll lock
-------------------------------------------------------- */
+/* ---------------- Modal (glass + body scroll lock) ---------------- */
 function Modal({ open, onClose, title, children }) {
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
@@ -83,26 +71,25 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
-/* -------------------------------------------------------
-   Header (tight + neat on mobile & desktop)
-------------------------------------------------------- */
+/* ---------------- Header (tidy, responsive) ---------------- */
 function Header({ dark, setDark, openTips, openAbout, openContact }) {
   return (
     <header className="fixed-header">
       <div className="header-inner">
         <div className="brand">
-          <span className="brand-big">CandL</span>
-          <span className="brand-small">Stock Analyser</span>
+          <div className="brand-mark">C</div>
+          <div className="brand-text">
+            <div className="brand-big">CandL</div>
+            <div className="brand-small">Stock Analyser</div>
+          </div>
         </div>
 
         <nav className="header-actions" aria-label="primary">
           <button className="btn ghost icon" onClick={() => setDark(d => !d)} aria-label="Toggle theme">
             {dark ? "🌙" : "☀️"}
           </button>
-          <button className="btn" onClick={openTips} title="Tips">
-            💡 <span className="hide-xs">Tips</span>
-          </button>
-          <button className="btn ghost hide-sm" onClick={openAbout}>About</button>
+          <button className="btn ghost icon" onClick={openTips} aria-label="Open tips">💡</button>
+          <button className="btn ghost hide-xs" onClick={openAbout}>About</button>
           <button className="btn primary contact-cta" onClick={openContact}>Contact developer</button>
         </nav>
       </div>
@@ -110,9 +97,7 @@ function Header({ dark, setDark, openTips, openAbout, openContact }) {
   );
 }
 
-/* -------------------------------------------------------
-   Snapshot cards
-------------------------------------------------------- */
+/* ---------------- Snapshot cards ---------------- */
 function Snapshot({ profile, quote }) {
   if (!quote) return <p className="muted">Search a symbol above to begin your analysis.</p>;
   const change = quote.c - quote.pc;
@@ -154,9 +139,7 @@ function Snapshot({ profile, quote }) {
   );
 }
 
-/* -------------------------------------------------------
-   News grid
-------------------------------------------------------- */
+/* ---------------- News grid ---------------- */
 function NewsGrid({ rows }) {
   if (!rows?.length) return <p className="muted">No recent headlines yet.</p>;
   return (
@@ -174,9 +157,49 @@ function NewsGrid({ rows }) {
   );
 }
 
-/* -------------------------------------------------------
-   Footer (simpler, removed Finnhub button)
-------------------------------------------------------- */
+/* ---------------- Social Sentiment (Finnhub /news-sentiment) ---------------- */
+function SentimentBar({ label, value }) {
+  const v = Math.max(0, Math.min(100, value || 0));
+  return (
+    <div className="sent-row">
+      <div className="sent-label">{label}</div>
+      <div className="sent-bar">
+        <div className="sent-fill" style={{ width: `${v}%` }} />
+        <div className="sent-val">{v.toFixed(0)}%</div>
+      </div>
+    </div>
+  );
+}
+
+function SentimentPanel({ data }) {
+  if (!data) return <p className="muted">No sentiment yet. Search a symbol first.</p>;
+  const bull = data?.sentiment?.bullishPercent ?? null;
+  const bear = data?.sentiment?.bearishPercent ?? null;
+  const buzz = data?.buzz?.buzz ?? null;
+  const artW = data?.buzz?.articlesInLastWeek ?? null;
+  const avgW = data?.buzz?.weeklyAverage ?? null;
+
+  return (
+    <div className="sent-grid">
+      <div className="sent-card">
+        <h3 className="sent-title">Market Buzz</h3>
+        <div className="muted sm">Articles this week</div>
+        <div className="value">{artW ?? "—"}</div>
+        <div className="muted sm">Vs weekly avg: <strong>{avgW ?? "—"}</strong></div>
+        <div className="muted sm">Buzz factor</div>
+        <div className="value">{buzz ? buzz.toFixed(2) : "—"}</div>
+      </div>
+      <div className="sent-card">
+        <h3 className="sent-title">Sentiment Mix</h3>
+        <SentimentBar label="Bullish" value={bull} />
+        <SentimentBar label="Bearish" value={bear} />
+        <div className="muted sm">Source: Finnhub news-sentiment</div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Footer ---------------- */
 function Footer({ openAbout, openContact }) {
   return (
     <footer className="footer">
@@ -191,11 +214,9 @@ function Footer({ openAbout, openContact }) {
   );
 }
 
-/* -------------------------------------------------------
-   App
-------------------------------------------------------- */
+/* ---------------- App ---------------- */
 export default function App() {
-  // theme & page skin
+  // theme
   const [dark, setDark] = useState(() => read("ui:dark", true));
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
@@ -208,7 +229,7 @@ export default function App() {
   const [tipsOpen, setTipsOpen] = useState(() => read("tips:open", false)); // closed by default
   useEffect(() => write("tips:open", tipsOpen), [tipsOpen]);
 
-  // search/data
+  // search + data
   const initialS = new URLSearchParams(window.location.search).get("s") || "";
   const [q, setQ] = useState(initialS);
   const [tab, setTab] = useState("snapshot");
@@ -216,26 +237,23 @@ export default function App() {
   const [quote, setQuote] = useState(null);
   const [profile, setProfile] = useState(null);
   const [news, setNews] = useState([]);
+  const [sentiment, setSentiment] = useState(null);
 
-  // global news
+  // global news (kept, but not the focus here)
   const [globalNews, setGlobalNews] = useState([]);
   useEffect(() => {
-    // Finnhub general market news (free)
     const load = async () => {
       try {
         const res = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${FINN}`);
         const rows = await res.json();
-        setGlobalNews((rows || []).slice(0, 10));
+        setGlobalNews((rows || []).slice(0, 8));
       } catch (e) { console.error(e); }
     };
     load();
   }, []);
 
-  // free-plan safe list
-  const ALLOW = useMemo(
-    () => ["AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "GOOGL", "AVGO"],
-    []
-  );
+  // allowlist (free plan friendly)
+  const ALLOW = useMemo(() => ["AAPL","MSFT","NVDA","AMZN","META","TSLA","GOOGL","AVGO"], []);
 
   const analyze = async () => {
     const sym = (q || "").toUpperCase().trim();
@@ -253,19 +271,22 @@ export default function App() {
 
       const to = new Date();
       const from = new Date(Date.now() - 7 * 864e5);
-      const rows = await fetch(
+      const newsRows = await fetch(
         `https://finnhub.io/api/v1/company-news?symbol=${sym}&from=${isoDate(from)}&to=${isoDate(to)}&token=${FINN}`
       ).then(r => r.json());
-
       const seen = new Set();
-      const dedup = (rows || []).filter(n => {
+      const dedup = (newsRows || []).filter(n => {
         const h = (n.headline || "").trim();
         if (!h || seen.has(h)) return false;
         seen.add(h); return true;
       });
       setNews(dedup.slice(0, 12));
-      setTab("snapshot");
 
+      // NEW: news-sentiment
+      const sent = await fetch(`https://finnhub.io/api/v1/news-sentiment?symbol=${sym}&token=${FINN}`).then(r => r.json());
+      setSentiment(sent || null);
+
+      setTab("snapshot");
       const p = new URLSearchParams(window.location.search);
       p.set("s", sym); window.history.replaceState({}, "", `?${p.toString()}`);
     } catch (e) {
@@ -274,7 +295,7 @@ export default function App() {
   };
 
   const clearAll = () => {
-    setQuote(null); setProfile(null); setNews([]); setQ("");
+    setQuote(null); setProfile(null); setNews([]); setSentiment(null); setQ("");
     const p = new URLSearchParams(window.location.search);
     p.delete("s"); window.history.replaceState({}, "", `?${p.toString()}`);
   };
@@ -284,7 +305,7 @@ export default function App() {
 
   return (
     <>
-      {/* Background skin */}
+      {/* Frosted animated backdrop */}
       <div className="bg-anim" aria-hidden />
 
       {/* Header + Tape */}
@@ -297,13 +318,13 @@ export default function App() {
       />
       <TradingViewTape dark={dark} />
 
-      {/* Body */}
+      {/* Main */}
       <main className="page-under-fixed">
         <section className="panel glass">
           <h1 className="h1">Market Intelligence</h1>
-          <p className="muted lead">Live snapshot, curated headlines, dividends &amp; earnings.</p>
+          <p className="muted lead">Live snapshot, social sentiment, and curated headlines.</p>
 
-          {/* tidy mobile actions */}
+          {/* Tidy mobile actions */}
           <div className="action-stack">
             <input
               className="input"
@@ -319,9 +340,9 @@ export default function App() {
               <button className="btn" onClick={clearAll}>Clear Snapshot</button>
             </div>
             <div className="tabs">
-              {["snapshot", "news", "events"].map((k) => (
+              {["snapshot", "news", "sentiment", "events"].map((k) => (
                 <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
-                  {k === "snapshot" ? "Snapshot" : k === "news" ? "News" : "Events"}
+                  {k[0].toUpperCase() + k.slice(1)}
                 </button>
               ))}
             </div>
@@ -329,6 +350,7 @@ export default function App() {
 
           {tab === "snapshot" && <Snapshot profile={profile} quote={quote} />}
           {tab === "news" && <NewsGrid rows={news} />}
+          {tab === "sentiment" && <SentimentPanel data={sentiment} />}
           {tab === "events" && (
             <div className="empty">
               <div className="emoji">📅</div>
@@ -338,7 +360,7 @@ export default function App() {
           )}
         </section>
 
-        {/* Top Market News — Global (now loads) */}
+        {/* Global News (kept tidy) */}
         <section className="section glass-alt">
           <h2 className="h2">Top Market News — Global</h2>
           {!globalNews.length ? (
@@ -364,12 +386,10 @@ export default function App() {
       {/* Modals */}
       <Modal open={aboutOpen} onClose={() => setAboutOpen(false)} title="About CandL">
         <p><strong>CandL</strong> is a mobile-first stock analyser focused on clarity, speed, and accessibility.</p>
-        <p>Enter a supported ticker to see real-time pricing context, day ranges, and curated company headlines.
-           Use the tabs to switch views. The theme toggle adapts both the UI and the market tape.</p>
-        <p>Deep-link any symbol with <code>?s=SYMBOL</code> (e.g., <code>?s=AAPL</code>) to share a direct view.
-           Your API key lives as an environment variable and is never hard-coded into the client build.</p>
-        <p className="muted">Built with React. Design language: glass surfaces, soft shadows, and compact
-           touch-targets for a calm, professional feel.</p>
+        <p>Enter a supported ticker to see a real-time snapshot, sentiment mix from recent news, and curated headlines.
+           Use the tabs to switch views. Theme toggle adapts the UI and the market tape.</p>
+        <p>Share links like <code>?s=AAPL</code> to open directly. Your API key is stored securely as an environment variable.</p>
+        <p className="muted">Design: frosted glass panels over a calm animated canvas; compact controls and readable type for small screens.</p>
       </Modal>
 
       <Modal open={contactOpen} onClose={() => setContactOpen(false)} title="Contact the Developer">
@@ -384,10 +404,10 @@ export default function App() {
 
       <Modal open={tipsOpen} onClose={() => setTipsOpen(false)} title="Quick Tips">
         <ul className="list">
-          <li>Type a ticker like <code>AAPL</code> → tap <strong>Analyze</strong>.</li>
-          <li>Use tabs for <strong>Snapshot</strong>, <strong>News</strong>, <strong>Events</strong>.</li>
-          <li>Switch themes with ☀️/🌙 — the market tape follows suit.</li>
-          <li>Share <code>?s=NVDA</code> to deep-link a symbol.</li>
+          <li>Type a ticker (e.g., <code>AAPL</code>) → <strong>Analyze</strong>.</li>
+          <li>Tabs: <strong>Snapshot</strong>, <strong>News</strong>, <strong>Sentiment</strong>, <strong>Events</strong>.</li>
+          <li>Switch themes with ☀️/🌙 — the market tape follows.</li>
+          <li>Share <code>?s=NVDA</code> to open directly.</li>
         </ul>
       </Modal>
     </>
