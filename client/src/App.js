@@ -9,6 +9,47 @@ const pad2 = (n) => String(n).padStart(2, "0");
 const isoDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const FINN = process.env.REACT_APP_FINNHUB_KEY || "";
 
+/* ---- tiny sentiment lexicon (fallback) ---- */
+const POS = new Set([
+  "beat","beats","beating","growth","surge","surges","surging","jump","jumps","jumping",
+  "rally","rallies","bull","bullish","buy","buys","upgrade","upgrades","record","profit",
+  "profits","profitable","strong","strength","gain","gains","gaining","outperform","top","tops",
+  "positive","optimistic","recover","recovery","recovering","expand","expands","expansion"
+]);
+const NEG = new Set([
+  "miss","misses","missed","fall","falls","falling","drop","drops","dropped","plunge","plunges",
+  "bear","bearish","sell","sells","downgrade","downgrades","loss","losses","weak","weakness",
+  "decline","declines","declining","cut","cuts","cutting","lawsuit","probe","investigation",
+  "risk","risks","negative","warning","halt","halts","recall","restructuring","bankrupt","bankruptcy"
+]);
+
+function scoreText(s="") {
+  const words = s.toLowerCase().replace(/[^a-z0-9\s]/g," ").split(/\s+/);
+  let pos=0, neg=0;
+  for (const w of words){ if (POS.has(w)) pos++; if (NEG.has(w)) neg++; }
+  return pos - neg;
+}
+
+function fallbackSentimentFromNews(rows) {
+  if (!rows || !rows.length) return null;
+  let posCount=0, negCount=0, neuCount=0;
+  for (const n of rows) {
+    const text = `${n.headline||""} ${n.summary||""}`;
+    const sc = scoreText(text);
+    if (sc > 0) posCount++; else if (sc < 0) negCount++; else neuCount++;
+  }
+  const total = posCount + negCount + neuCount || 1;
+  const bullishPercent = (posCount / total) * 100;
+  const bearishPercent = (negCount / total) * 100;
+  const articlesInLastWeek = rows.length;
+  const weeklyAverage = 20; // simple baseline so Buzz has context
+  const buzz = Math.min(3, articlesInLastWeek / weeklyAverage) * 100 / 3 * 100 / 100; // scaled 0–100
+  return {
+    buzz: { articlesInLastWeek, weeklyAverage, buzz },
+    sentiment: { bullishPercent, bearishPercent }
+  };
+}
+
 /* ---------------- TradingView (scaled + opaque) ---------------- */
 function TradingViewTape({ dark }) {
   const ref = useRef(null);
@@ -30,7 +71,7 @@ function TradingViewTape({ dark }) {
       ],
       showSymbolLogo: true,
       colorTheme: dark ? "dark" : "light",
-      isTransparent: false,      // opaque so it doesn’t look “see-through”
+      isTransparent: false,
       displayMode: "adaptive",
       locale: "en"
     });
@@ -55,7 +96,6 @@ function Modal({ open, onClose, title, children }) {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [open]);
-
   if (!open) return null;
   return (
     <>
@@ -83,7 +123,6 @@ function Header({ dark, setDark, openTips, openAbout, openContact }) {
             <div className="brand-small">Stock Analyser</div>
           </div>
         </div>
-
         <nav className="header-actions" aria-label="primary">
           <button className="btn ghost icon" onClick={() => setDark(d => !d)} aria-label="Toggle theme">
             {dark ? "🌙" : "☀️"}
@@ -102,7 +141,6 @@ function Snapshot({ profile, quote }) {
   if (!quote) return <p className="muted">Search a symbol above to begin your analysis.</p>;
   const change = quote.c - quote.pc;
   const pct = quote.pc ? (change / quote.pc) * 100 : 0;
-
   return (
     <>
       <div className="grid">
@@ -157,9 +195,9 @@ function NewsGrid({ rows }) {
   );
 }
 
-/* ---------------- Social Sentiment (Finnhub /news-sentiment) ---------------- */
+/* ---------------- Social Sentiment UI ---------------- */
 function SentimentBar({ label, value }) {
-  const v = Math.max(0, Math.min(100, value || 0));
+  const v = Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
   return (
     <div className="sent-row">
       <div className="sent-label">{label}</div>
@@ -170,7 +208,6 @@ function SentimentBar({ label, value }) {
     </div>
   );
 }
-
 function SentimentPanel({ data }) {
   if (!data) return <p className="muted">No sentiment yet. Search a symbol first.</p>;
   const bull = data?.sentiment?.bullishPercent ?? null;
@@ -178,7 +215,6 @@ function SentimentPanel({ data }) {
   const buzz = data?.buzz?.buzz ?? null;
   const artW = data?.buzz?.articlesInLastWeek ?? null;
   const avgW = data?.buzz?.weeklyAverage ?? null;
-
   return (
     <div className="sent-grid">
       <div className="sent-card">
@@ -187,13 +223,13 @@ function SentimentPanel({ data }) {
         <div className="value">{artW ?? "—"}</div>
         <div className="muted sm">Vs weekly avg: <strong>{avgW ?? "—"}</strong></div>
         <div className="muted sm">Buzz factor</div>
-        <div className="value">{buzz ? buzz.toFixed(2) : "—"}</div>
+        <div className="value">{Number.isFinite(buzz) ? buzz.toFixed(2) : "—"}</div>
       </div>
       <div className="sent-card">
         <h3 className="sent-title">Sentiment Mix</h3>
         <SentimentBar label="Bullish" value={bull} />
         <SentimentBar label="Bearish" value={bear} />
-        <div className="muted sm">Source: Finnhub news-sentiment</div>
+        <div className="muted sm">Source: Finnhub news-sentiment (fallback to headlines)</div>
       </div>
     </div>
   );
@@ -226,10 +262,10 @@ export default function App() {
   // modals
   const [aboutOpen, setAboutOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
-  const [tipsOpen, setTipsOpen] = useState(() => read("tips:open", false)); // closed by default
+  const [tipsOpen, setTipsOpen] = useState(() => read("tips:open", false));
   useEffect(() => write("tips:open", tipsOpen), [tipsOpen]);
 
-  // search + data
+  // search/data
   const initialS = new URLSearchParams(window.location.search).get("s") || "";
   const [q, setQ] = useState(initialS);
   const [tab, setTab] = useState("snapshot");
@@ -237,9 +273,13 @@ export default function App() {
   const [quote, setQuote] = useState(null);
   const [profile, setProfile] = useState(null);
   const [news, setNews] = useState([]);
-  const [sentiment, setSentiment] = useState(null);
 
-  // global news (kept, but not the focus here)
+  // sentiment
+  const [sentiment, setSentiment] = useState(null);
+  const [sentimentLoading, setSentimentLoading] = useState(false);
+  const [sentimentError, setSentimentError] = useState(null);
+
+  // global news
   const [globalNews, setGlobalNews] = useState([]);
   useEffect(() => {
     const load = async () => {
@@ -252,7 +292,7 @@ export default function App() {
     load();
   }, []);
 
-  // allowlist (free plan friendly)
+  // free-plan allowlist
   const ALLOW = useMemo(() => ["AAPL","MSFT","NVDA","AMZN","META","TSLA","GOOGL","AVGO"], []);
 
   const analyze = async () => {
@@ -262,13 +302,17 @@ export default function App() {
       return;
     }
     setLoading(true);
+    setSentimentLoading(true);
+    setSentimentError(null);
     try {
+      // Snapshot + profile
       const [qr, pr] = await Promise.all([
         fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${FINN}`).then(r => r.json()),
         fetch(`https://finnhub.io/api/v1/stock/profile2?symbol=${sym}&token=${FINN}`).then(r => r.json())
       ]);
       setQuote(qr); setProfile(pr);
 
+      // Company news (7d) — also used for fallback
       const to = new Date();
       const from = new Date(Date.now() - 7 * 864e5);
       const newsRows = await fetch(
@@ -282,25 +326,57 @@ export default function App() {
       });
       setNews(dedup.slice(0, 12));
 
-      // NEW: news-sentiment
-      const sent = await fetch(`https://finnhub.io/api/v1/news-sentiment?symbol=${sym}&token=${FINN}`).then(r => r.json());
-      setSentiment(sent || null);
+      // Finnhub sentiment (primary)
+      let sentData = null;
+      try {
+        const resp = await fetch(`https://finnhub.io/api/v1/news-sentiment?symbol=${sym}&token=${FINN}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const js = await resp.json();
+        // check if data is meaningful
+        const hasBull = Number.isFinite(js?.sentiment?.bullishPercent);
+        const hasBear = Number.isFinite(js?.sentiment?.bearishPercent);
+        const hasBuzz = Number.isFinite(js?.buzz?.articlesInLastWeek);
+        if (hasBull || hasBear || hasBuzz) {
+          sentData = js;
+        }
+      } catch (e) {
+        // keep sentData = null; will fallback below
+      }
 
-      setTab("snapshot");
+      // Fallback: derive from headlines if Finnhub returns empty/weak
+      if (!sentData || (!sentData.sentiment && !sentData.buzz)) {
+        const fb = fallbackSentimentFromNews(dedup);
+        if (fb) {
+          sentData = fb;
+        } else {
+          setSentimentError("Sentiment unavailable right now. Try again in a minute.");
+        }
+      }
+
+      setSentiment(sentData || null);
+      setTab("sentiment"); // jump user straight to sentiment after analyze
+      // deep link
       const p = new URLSearchParams(window.location.search);
       p.set("s", sym); window.history.replaceState({}, "", `?${p.toString()}`);
     } catch (e) {
       console.error(e);
-    } finally { setLoading(false); }
+      setSentiment(null);
+      setSentimentError("Could not load sentiment. Please retry.");
+    } finally {
+      setLoading(false);
+      setSentimentLoading(false);
+    }
   };
 
   const clearAll = () => {
-    setQuote(null); setProfile(null); setNews([]); setSentiment(null); setQ("");
+    setQuote(null); setProfile(null); setNews([]); setSentiment(null);
+    setSentimentError(null); setSentimentLoading(false);
+    setQ("");
     const p = new URLSearchParams(window.location.search);
     p.delete("s"); window.history.replaceState({}, "", `?${p.toString()}`);
   };
 
-  // auto-load deep link
+  // auto-load deep link if provided
   useEffect(() => { if (initialS) analyze(); /* eslint-disable-next-line */ }, []);
 
   return (
@@ -334,9 +410,11 @@ export default function App() {
               onKeyDown={(e) => e.key === "Enter" && analyze()}
             />
             <div className="action-row">
-              <button className="btn primary" onClick={analyze} disabled={loading}>
-                {loading ? "Analyzing…" : "Analyze"}
+              <button className="btn primary" onClick={analyze} disabled={loading || sentimentLoading}>
+                {(loading || sentimentLoading) ? "Analyzing…" : "Analyze"}
               </button>
+            </div>
+            <div className="action-row">
               <button className="btn" onClick={clearAll}>Clear Snapshot</button>
             </div>
             <div className="tabs">
@@ -350,7 +428,17 @@ export default function App() {
 
           {tab === "snapshot" && <Snapshot profile={profile} quote={quote} />}
           {tab === "news" && <NewsGrid rows={news} />}
-          {tab === "sentiment" && <SentimentPanel data={sentiment} />}
+
+          {tab === "sentiment" && (
+            sentimentLoading ? (
+              <p className="muted">Loading sentiment…</p>
+            ) : sentimentError ? (
+              <p className="muted">{sentimentError}</p>
+            ) : (
+              <SentimentPanel data={sentiment} />
+            )
+          )}
+
           {tab === "events" && (
             <div className="empty">
               <div className="emoji">📅</div>
@@ -360,7 +448,7 @@ export default function App() {
           )}
         </section>
 
-        {/* Global News (kept tidy) */}
+        {/* Global News */}
         <section className="section glass-alt">
           <h2 className="h2">Top Market News — Global</h2>
           {!globalNews.length ? (
@@ -387,7 +475,7 @@ export default function App() {
       <Modal open={aboutOpen} onClose={() => setAboutOpen(false)} title="About CandL">
         <p><strong>CandL</strong> is a mobile-first stock analyser focused on clarity, speed, and accessibility.</p>
         <p>Enter a supported ticker to see a real-time snapshot, sentiment mix from recent news, and curated headlines.
-           Use the tabs to switch views. Theme toggle adapts the UI and the market tape.</p>
+           Use the tabs to switch views. The theme toggle adapts the UI and the market tape.</p>
         <p>Share links like <code>?s=AAPL</code> to open directly. Your API key is stored securely as an environment variable.</p>
         <p className="muted">Design: frosted glass panels over a calm animated canvas; compact controls and readable type for small screens.</p>
       </Modal>
