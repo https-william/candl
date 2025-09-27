@@ -1698,3 +1698,11 @@ html[data-theme="dark"]{
 
 /* ---------------- Accessibility focus ---------------- */
 :focus-visible{ outline: 2px solid color-mix(in hsl, var(--accent) 60%, white); outline-offset: 2px }
+/* Ultra-small devices safety net */
+@media (max-width: 380px){
+  :root{ --hdrH: 56px; --tapeH: 26px; }
+  .brand-big{ font-size: 16px }
+  .brand-small{ font-size: 11px }
+  .btn{ height: 36px; padding: 0 10px }
+  .btn.primary{ padding: 0 12px }
+}
