@@ -153,3 +153,6 @@ class handler(BaseHTTPRequestHandler):
             self._ok(out)
         except Exception as e:
             self._ok({"error": str(e)}, 400)
+
+def do_GET(self):
+    self._ok({"ok": True, "hint": "Use POST with JSON. Example: { texts: [] } or { symbol: 'AAPL' }"})
