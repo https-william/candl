@@ -1,556 +1,367 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// ===== CandL — App.js (drop-in) =====
+import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 
-/* ---------------- utils ---------------- */
-const read = (k, f) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : f; } catch { return f; } };
-const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-const usd = (n) => (typeof n === "number" ? n.toLocaleString(undefined, { style: "currency", currency: "USD" }) : "—");
-const pad2 = (n) => String(n).padStart(2, "0");
-const isoDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-const FINN = process.env.REACT_APP_FINNHUB_KEY || "";
+/** ENV (Create React App) */
+const FINN = process.env.REACT_APP_FINNHUB_KEY;               // .env value
+const API = "https://candl-api.vercel.app";                   // your serverless API
 
-/* ---- tiny sentiment lexicon (fallback) ---- */
-const POS = new Set([
-  "beat","beats","beating","growth","surge","surges","surging","jump","jumps","jumping",
-  "rally","rallies","bull","bullish","buy","buys","upgrade","upgrades","record","profit",
-  "profits","profitable","strong","strength","gain","gains","gaining","outperform","top","tops",
-  "positive","optimistic","recover","recovery","recovering","expand","expands","expansion"
-]);
-const NEG = new Set([
-  "miss","misses","missed","fall","falls","falling","drop","drops","dropped","plunge","plunges",
-  "bear","bearish","sell","sells","downgrade","downgrades","loss","losses","weak","weakness",
-  "decline","declines","declining","cut","cuts","cutting","lawsuit","probe","investigation",
-  "risk","risks","negative","warning","halt","halts","recall","restructuring","bankrupt","bankruptcy"
-]);
+const defaultTickers = ["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"];
 
-function scoreText(s="") {
-  const words = s.toLowerCase().replace(/[^a-z0-9\s]/g," ").split(/\s+/);
-  let pos=0, neg=0;
-  for (const w of words){ if (POS.has(w)) pos++; if (NEG.has(w)) neg++; }
-  return pos - neg;
-}
-function fallbackSentimentFromNews(rows) {
-  if (!rows || !rows.length) return null;
-  let posCount=0, negCount=0, neuCount=0;
-  for (const n of rows) {
-    const text = `${n.headline||""} ${n.summary||""}`;
-    const sc = scoreText(text);
-    if (sc > 0) posCount++; else if (sc < 0) negCount++; else neuCount++;
-  }
-  const total = posCount + negCount + neuCount || 1;
-  const bullishPercent = (posCount / total) * 100;
-  const bearishPercent = (negCount / total) * 100;
-  const articlesInLastWeek = rows.length;
-  const weeklyAverage = 20; // simple baseline for context
-  const buzz = Math.min(3, articlesInLastWeek / weeklyAverage) * (100/3);
-  return {
-    buzz: { articlesInLastWeek, weeklyAverage, buzz },
-    sentiment: { bullishPercent, bearishPercent }
-  };
-}
+/** Util */
+const today = () => new Date().toISOString().slice(0, 10);
+const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
 
-/* ---------------- TradingView (scaled + opaque) ---------------- */
-function TradingViewTape({ dark }) {
-  const ref = useRef(null);
+function useTheme() {
+  const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
   useEffect(() => {
-    if (!ref.current) return;
-    ref.current.innerHTML = "";
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+  return { theme, setTheme };
+}
+
+function Pill({ type, children }) {
+  const cls = type === "pos" ? "pill pill-pos" : type === "neg" ? "pill pill-neg" : "pill pill-mid";
+  return <span className={cls}>{children}</span>;
+}
+
+export default function App() {
+  const { theme, setTheme } = useTheme();
+  const [tab, setTab] = useState("snapshot");
+  const [symbol, setSymbol] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const [quote, setQuote] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [companyNews, setCompanyNews] = useState([]);
+  const [marketNews, setMarketNews] = useState([]);
+  const [consensus, setConsensus] = useState(null);
+
+  const [showAbout, setShowAbout] = useState(false);
+  const [showContact, setShowContact] = useState(false);
+
+  /** Ticker tape */
+  const tvRef = useRef(null);
+  useEffect(() => {
+    if (!tvRef.current) return;
+    // clear old
+    tvRef.current.innerHTML = "";
+    // inject TradingView script
     const s = document.createElement("script");
     s.src = "https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js";
     s.async = true;
     s.innerHTML = JSON.stringify({
-      symbols: [
-        { proName: "NASDAQ:AAPL", title: "AAPL" },
-        { proName: "NASDAQ:MSFT", title: "MSFT" },
-        { proName: "NASDAQ:NVDA", title: "NVDA" },
-        { proName: "NASDAQ:AMZN", title: "AMZN" },
-        { proName: "NASDAQ:META", title: "META" },
-        { proName: "NASDAQ:TSLA", title: "TSLA" },
-        { proName: "NASDAQ:GOOGL", title: "GOOGL" }
-      ],
+      symbols: defaultTickers.map((t) => ({ proName: `NASDAQ:${t}`, title: t })),
       showSymbolLogo: true,
-      colorTheme: dark ? "dark" : "light",
+      colorTheme: theme === "dark" ? "dark" : "light",
       isTransparent: false,
       displayMode: "adaptive",
-      locale: "en"
+      locale: "en",
     });
-    ref.current.appendChild(s);
-    return () => { if (ref.current) ref.current.innerHTML = ""; };
-  }, [dark]);
+    tvRef.current.appendChild(s);
+  }, [theme]);
 
-  return (
-    <div className="fixed-tape">
-      <div className="tv-wrap">
-        <div className="tradingview-widget-container tv-opaque">
-          <div className="tradingview-widget-container__widget" ref={ref} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------- Modal (glass + body scroll lock) ---------------- */
-function Modal({ open, onClose, title, children }) {
+  /** Boot: global news */
   useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
-  }, [open]);
-  if (!open) return null;
-  return (
-    <>
-      <div className="modal-dim" onClick={onClose} />
-      <div className="modal-card" role="dialog" aria-modal="true" aria-label={title}>
-        <div className="modal-head">
-          <h3>{title}</h3>
-          <button className="btn ghost sm" onClick={onClose}>Close</button>
-        </div>
-        <div className="modal-body">{children}</div>
-      </div>
-    </>
-  );
-}
-
-/* ---------------- Brand mark (SVG) ---------------- */
-function CandlMark({ size = 34 }) {
-  return (
-    <img
-      src={process.env.PUBLIC_URL + "/candl.svg"}
-      alt="CandL"
-      width={size}
-      height={size}
-      className="brand-svg"
-      draggable="false"
-    />
-  );
-}
-
-/* ---------------- Header (with Install button) ---------------- */
-function Header({ dark, setDark, openTips, openAbout, openContact, canInstall, onInstall }) {
-  return (
-    <header className="fixed-header">
-      <div className="header-inner">
-        <div className="brand">
-          <div className="brand-mark"><CandlMark size={34} /></div>
-          <div className="brand-text">
-            <div className="brand-big">CandL</div>
-            <div className="brand-small">Stock Analyser</div>
-          </div>
-        </div>
-        <nav className="header-actions" aria-label="primary">
-          {canInstall && (
-            <button className="btn ghost hide-xs" onClick={onInstall} title="Install app">Install</button>
-          )}
-          <button className="btn ghost icon" onClick={() => setDark(d => !d)} aria-label="Toggle theme">
-            {dark ? "🌙" : "☀️"}
-          </button>
-          <button className="btn ghost icon" onClick={openTips} aria-label="Open tips">💡</button>
-          <button className="btn ghost hide-xs" onClick={openAbout}>About</button>
-          <button className="btn primary contact-cta" onClick={openContact}>Contact developer</button>
-        </nav>
-      </div>
-    </header>
-  );
-}
-
-/* ---------------- Snapshot cards ---------------- */
-function Snapshot({ profile, quote }) {
-  if (!quote) return <p className="muted">Search a symbol above to begin your analysis.</p>;
-  const change = quote.c - quote.pc;
-  const pct = quote.pc ? (change / quote.pc) * 100 : 0;
-  return (
-    <>
-      <div className="grid">
-        <div className="card">
-          <div className="label">Company</div>
-          <div className="value">{profile?.name || profile?.ticker || "—"}</div>
-          <div className="sub">
-            {(profile?.exchange || "").toUpperCase()} · {(profile?.currency || "USD").toUpperCase()}
-          </div>
-        </div>
-        <div className="card">
-          <div className="label">Price</div>
-          <div className="value mono">
-            {usd(quote.c)}{" "}
-            <span className={change >= 0 ? "up" : "down"}>
-              {change >= 0 ? "▲" : "▼"} {pct.toFixed(2)}%
-            </span>
-          </div>
-          <div className="sub">Prev close {usd(quote.pc)}</div>
-        </div>
-        <div className="card">
-          <div className="label">Day High / Low</div>
-          <div className="value mono">{usd(quote.h)} / {usd(quote.l)}</div>
-          <div className="sub">Today</div>
-        </div>
-        <div className="card">
-          <div className="label">Open</div>
-          <div className="value mono">{usd(quote.o)}</div>
-          <div className="sub">Today</div>
-        </div>
-      </div>
-      <div className="footnote"><span className="dot" /> Data via Finnhub</div>
-    </>
-  );
-}
-
-/* ---------------- News grid ---------------- */
-function NewsGrid({ rows }) {
-  if (!rows?.length) return <p className="muted">No recent headlines yet.</p>;
-  return (
-    <div className="news-grid">
-      {rows.map((n) => (
-        <a key={(n.id || n.url) + n.datetime} className="news" href={n.url} target="_blank" rel="noreferrer">
-          <div className="news-meta">
-            {n.source || "Source"} · {new Date((n.datetime || 0) * 1000).toLocaleString()}
-          </div>
-          <div className="news-title">{n.headline}</div>
-          <div className="news-snippet">{n.summary}</div>
-        </a>
-      ))}
-    </div>
-  );
-}
-
-/* ---------------- Social Sentiment UI ---------------- */
-function SentimentBar({ label, value }) {
-  const v = Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
-  return (
-    <div className="sent-row">
-      <div className="sent-label">{label}</div>
-      <div className="sent-bar">
-        <div className="sent-fill" style={{ width: `${v}%` }} />
-        <div className="sent-val">{v.toFixed(0)}%</div>
-      </div>
-    </div>
-  );
-}
-function SentimentPanel({ data }) {
-  if (!data) return <p className="muted">No sentiment yet. Search a symbol first.</p>;
-  const bull = data?.sentiment?.bullishPercent ?? null;
-  const bear = data?.sentiment?.bearishPercent ?? null;
-  const buzz = data?.buzz?.buzz ?? null;
-  const artW = data?.buzz?.articlesInLastWeek ?? null;
-  const avgW = data?.buzz?.weeklyAverage ?? null;
-  return (
-    <div className="sent-grid">
-      <div className="sent-card">
-        <h3 className="sent-title">Market Buzz</h3>
-        <div className="muted sm">Articles this week</div>
-        <div className="value">{artW ?? "—"}</div>
-        <div className="muted sm">Vs weekly avg: <strong>{avgW ?? "—"}</strong></div>
-        <div className="muted sm">Buzz factor</div>
-        <div className="value">{Number.isFinite(buzz) ? buzz.toFixed(2) : "—"}</div>
-      </div>
-      <div className="sent-card">
-        <h3 className="sent-title">Sentiment Mix</h3>
-        <SentimentBar label="Bullish" value={bull} />
-        <SentimentBar label="Bearish" value={bear} />
-        <div className="muted sm">Source: Finnhub news-sentiment (fallback to headlines)</div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------- Footer ---------------- */
-function Footer({ openAbout, openContact }) {
-  return (
-    <footer className="footer">
-      <div className="footer-inner">
-        <div className="muted sm">CandL — a William Popoola project · © {new Date().getFullYear()}</div>
-        <div className="footer-actions">
-          <button className="btn" onClick={openAbout}>About</button>
-          <button className="btn" onClick={openContact}>Contact</button>
-        </div>
-      </div>
-    </footer>
-  );
-}
-
-/* ---------------- App ---------------- */
-export default function App() {
-  // theme
-  const [dark, setDark] = useState(() => read("ui:dark", true));
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    write("ui:dark", dark);
-  }, [dark]);
-
-  // PWA install: capture event + show CTA (header + toast)
-  const [installEvent, setInstallEvent] = useState(null);
-  const [showInstallToast, setShowInstallToast] = useState(() => !read("pwa:toast-dismissed", false));
-  const canInstall = !!installEvent;
-
-  useEffect(() => {
-    const onBefore = (e) => { e.preventDefault(); setInstallEvent(e); };
-    const onInstalled = () => { setInstallEvent(null); setShowInstallToast(false); };
-    window.addEventListener("beforeinstallprompt", onBefore);
-    window.addEventListener("appinstalled", onInstalled);
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onBefore);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
-  }, []);
-
-  const triggerInstall = async () => {
-    if (!installEvent) return;
-    installEvent.prompt();
-    try { await installEvent.userChoice; } catch {}
-    setInstallEvent(null);
-  };
-  const dismissInstallToast = () => { setShowInstallToast(false); write("pwa:toast-dismissed", true); };
-
-  // modals
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [contactOpen, setContactOpen] = useState(false);
-  const [tipsOpen, setTipsOpen] = useState(() => read("tips:open", false));
-  useEffect(() => write("tips:open", tipsOpen), [tipsOpen]);
-
-  // search/data
-  const initialS = new URLSearchParams(window.location.search).get("s") || "";
-  const [q, setQ] = useState(initialS);
-  const [tab, setTab] = useState("snapshot");
-  const [loading, setLoading] = useState(false);
-  const [quote, setQuote] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [news, setNews] = useState([]);
-
-  // sentiment
-  const [sentiment, setSentiment] = useState(null);
-  const [sentimentLoading, setSentimentLoading] = useState(false);
-  const [sentimentError, setSentimentError] = useState(null);
-
-  // global news
-  const [globalNews, setGlobalNews] = useState([]);
-  useEffect(() => {
-    const load = async () => {
+    if (!FINN) return;
+    (async () => {
       try {
-        const res = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${FINN}`);
-        const rows = await res.json();
-        setGlobalNews((rows || []).slice(0, 8));
-      } catch (e) { console.error(e); }
-    };
-    load();
+        const url = `https://finnhub.io/api/v1/news?category=general&token=${FINN}`;
+        const r = await fetch(url);
+        const j = await r.json();
+        setMarketNews(Array.isArray(j) ? j.slice(0, 10) : []);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
   }, []);
 
-  // free-plan allowlist
-  const ALLOW = useMemo(() => ["AAPL","MSFT","NVDA","AMZN","META","TSLA","GOOGL","AVGO"], []);
-
-  const analyze = async () => {
-    const sym = (q || "").toUpperCase().trim();
-    if (!sym || !ALLOW.includes(sym)) {
-      alert("Use a supported symbol: AAPL, MSFT, NVDA, AMZN, META, TSLA, GOOGL, AVGO.");
+  /** Analyze */
+  async function handleAnalyze() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym) return;
+    if (!FINN) {
+      alert("Add REACT_APP_FINNHUB_KEY in .env to analyze companies.");
       return;
     }
     setLoading(true);
-    setSentimentLoading(true);
-    setSentimentError(null);
+    setTab("snapshot");
     try {
-      // Snapshot + profile
-      const [qr, pr] = await Promise.all([
-        fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${FINN}`).then(r => r.json()),
-        fetch(`https://finnhub.io/api/v1/stock/profile2?symbol=${sym}&token=${FINN}`).then(r => r.json())
+      const [q, p] = await Promise.all([
+        fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${FINN}`).then((r) => r.json()),
+        fetch(`https://finnhub.io/api/v1/stock/profile2?symbol=${sym}&token=${FINN}`).then((r) => r.json()),
       ]);
-      setQuote(qr); setProfile(pr);
+      setQuote(q && q.c ? q : null);
+      setProfile(p && p.name ? p : null);
 
-      // Company news (7d) — also used for fallback
-      const to = new Date();
-      const from = new Date(Date.now() - 7 * 864e5);
-      const newsRows = await fetch(
-        `https://finnhub.io/api/v1/company-news?symbol=${sym}&from=${isoDate(from)}&to=${isoDate(to)}&token=${FINN}`
-      ).then(r => r.json());
-      const seen = new Set();
-      const dedup = (newsRows || []).filter(n => {
-        const h = (n.headline || "").trim();
-        if (!h || seen.has(h)) return false;
-        seen.add(h); return true;
-      });
-      setNews(dedup.slice(0, 12));
+      // company news (last 7 days)
+      const from = daysAgo(7);
+      const to = today();
+      const news = await fetch(
+        `https://finnhub.io/api/v1/company-news?symbol=${sym}&from=${from}&to=${to}&token=${FINN}`
+      ).then((r) => r.json());
+      setCompanyNews(Array.isArray(news) ? news.slice(0, 14) : []);
 
-      // Finnhub sentiment (primary)
-      let sentData = null;
-      try {
-        const resp = await fetch(`https://finnhub.io/api/v1/news-sentiment?symbol=${sym}&token=${FINN}`);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const js = await resp.json();
-        const hasBull = Number.isFinite(js?.sentiment?.bullishPercent);
-        const hasBear = Number.isFinite(js?.sentiment?.bearishPercent);
-        const hasBuzz = Number.isFinite(js?.buzz?.articlesInLastWeek);
-        if (hasBull || hasBear || hasBuzz) sentData = js;
-      } catch {}
-
-      // Fallback from headlines if needed
-      if (!sentData || (!sentData.sentiment && !sentData.buzz)) {
-        const fb = fallbackSentimentFromNews(dedup);
-        if (fb) sentData = fb; else setSentimentError("Sentiment unavailable right now. Try again in a minute.");
-      }
-
-      setSentiment(sentData || null);
-      setTab("sentiment"); // jump to sentiment after analyze
-      // deep link
-      const p = new URLSearchParams(window.location.search);
-      p.set("s", sym); window.history.replaceState({}, "", `?${p.toString()}`);
+      // analyst consensus from your API
+      const cons = await fetch(`${API}/api/consensus`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: sym }),
+      }).then((r) => r.json());
+      setConsensus(cons || null);
     } catch (e) {
       console.error(e);
-      setSentiment(null);
-      setSentimentError("Could not load sentiment. Please retry.");
     } finally {
       setLoading(false);
-      setSentimentLoading(false);
     }
-  };
+  }
 
-  const clearAll = () => {
-    setQuote(null); setProfile(null); setNews([]); setSentiment(null);
-    setSentimentError(null); setSentimentLoading(false);
-    setQ("");
-    const p = new URLSearchParams(window.location.search);
-    p.delete("s"); window.history.replaceState({}, "", `?${p.toString()}`);
-  };
+  function clearSnapshot() {
+    setQuote(null);
+    setProfile(null);
+    setCompanyNews([]);
+    setConsensus(null);
+    setSymbol("");
+  }
 
-  // auto-load deep link if provided
-  useEffect(() => { if (initialS) analyze(); /* eslint-disable-next-line */ }, []);
-
-  /* simple inline styles for the install toast (so you don't need extra CSS) */
-  const toastStyle = {
-    position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 100,
-    display: (canInstall && showInstallToast) ? "grid" : "none",
-    gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center",
-    padding: "10px 12px", borderRadius: 12,
-    background: "var(--surface)", border: "1px solid var(--outline)", boxShadow: "var(--shadow)"
-  };
+  function consensusLabel(s) {
+    if (!s) return "—";
+    const { strongBuy = 0, buy = 0, hold = 0, sell = 0, strongSell = 0 } = s;
+    if (strongBuy + buy > sell + strongSell + hold) return strongBuy > 0 ? "Strong Buy" : "Buy";
+    if (sell + strongSell > strongBuy + buy + hold) return strongSell > 0 ? "Strong Sell" : "Sell";
+    return "Hold";
+  }
 
   return (
-    <>
-      {/* Frosted animated backdrop */}
-      <div className="bg-anim" aria-hidden />
-
-      {/* Header + Tape */}
-      <Header
-        dark={dark}
-        setDark={setDark}
-        openTips={() => setTipsOpen(true)}
-        openAbout={() => setAboutOpen(true)}
-        openContact={() => setContactOpen(true)}
-        canInstall={canInstall}
-        onInstall={triggerInstall}
-      />
-      <TradingViewTape dark={dark} />
-
-      {/* Install toast (polite, one-time per device) */}
-      <div style={toastStyle} role="dialog" aria-live="polite">
-        <div className="muted">
-          Install <strong>CandL</strong> for a faster, full-screen experience.
+    <div className="app-wrap">
+      {/* HEADER */}
+      <header className="header">
+        <div className="header-row container">
+          <div className="brand">
+            <div className="logo">C</div>
+            CandL <span style={{ opacity: 0.55, fontWeight: 700 }}>Stock Analyser</span>
+          </div>
+          <div className="header-spacer" />
+          <div className="header-actions">
+            <button className="btn pill ghost" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? "☀︎ Light" : "🌙 Dark"}
+            </button>
+            <button className="btn pill ghost" onClick={() => setShowAbout(true)}>About</button>
+            <button className="btn pill" onClick={() => setShowContact(true)}>Contact developer</button>
+          </div>
         </div>
-        <div style={{display:"flex", gap:8}}>
-          <button className="btn sm" onClick={triggerInstall}>Install</button>
-          <button className="btn ghost sm" onClick={dismissInstallToast}>Not now</button>
+      </header>
+
+      {/* TRADINGVIEW TICKER */}
+      <div className="ticker-wrap">
+        <div className="ticker-inner" style={{ padding: "4px 8px" }}>
+          <div className="tradingview-widget-container" ref={tvRef} />
         </div>
       </div>
 
-      {/* Main */}
-      <main className="page-under-fixed">
-        <section className="panel glass">
-          <h1 className="h1">Market Intelligence</h1>
-          <p className="muted lead">Live snapshot, social sentiment, and curated headlines.</p>
+      {/* MAIN */}
+      <main className="container stack">
+        {/* HERO */}
+        <section className="panel hero">
+          <h1 className="hero-title">Market Intelligence</h1>
+          <div className="hero-sub">Live snapshot, social sentiment, and curated headlines.</div>
 
-          {/* Tidy mobile actions */}
-          <div className="action-stack">
-            <input
-              className="input"
-              value={q}
-              placeholder="Search by symbol or name (e.g., AAPL)"
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && analyze()}
-            />
-            <div className="action-row">
-              <button className="btn primary" onClick={analyze} disabled={loading || sentimentLoading}>
-                {(loading || sentimentLoading) ? "Analyzing…" : "Analyze"}
+          <div className="stack" style={{ gap: 12 }}>
+            <div className="search-row">
+              <input
+                className="input"
+                placeholder="Search by symbol or name (e.g., AAPL)"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAnalyze()}
+              />
+              <button className="btn primary" onClick={handleAnalyze} disabled={loading}>
+                {loading ? "Analyzing…" : "Analyze"}
               </button>
             </div>
-            <div className="action-row">
-              <button className="btn" onClick={clearAll}>Clear Snapshot</button>
-            </div>
-            <div className="tabs">
-              {["snapshot", "news", "sentiment", "events"].map((k) => (
-                <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
-                  {k[0].toUpperCase() + k.slice(1)}
-                </button>
-              ))}
+
+            <div className="stack" style={{ gap: 8 }}>
+              <div className="tabs">
+                {["snapshot", "news", "sentiment", "events"].map((t) => (
+                  <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
+                    {t[0].toUpperCase() + t.slice(1)}
+                  </button>
+                ))}
+                <div style={{ flex: 1 }} />
+                <button className="btn ghost" onClick={clearSnapshot}>Clear Snapshot</button>
+              </div>
             </div>
           </div>
-
-          {tab === "snapshot" && <Snapshot profile={profile} quote={quote} />}
-          {tab === "news" && <NewsGrid rows={news} />}
-
-          {tab === "sentiment" && (
-            sentimentLoading ? (
-              <p className="muted">Loading sentiment…</p>
-            ) : sentimentError ? (
-              <p className="muted">{sentimentError}</p>
-            ) : (
-              <SentimentPanel data={sentiment} />
-            )
-          )}
-
-          {tab === "events" && (
-            <div className="empty">
-              <div className="emoji">📅</div>
-              <div className="title">Events coming soon</div>
-              <div className="muted">Earnings and dividends will appear here.</div>
-            </div>
-          )}
         </section>
 
-        {/* Global News */}
-        <section className="section glass-alt">
-          <h2 className="h2">Top Market News — Global</h2>
-          {!globalNews.length ? (
-            <p className="muted">Fetching headlines…</p>
-          ) : (
-            <div className="news-grid">
-              {globalNews.map((n) => (
-                <a key={(n.id || n.url) + n.datetime} className="news" href={n.url} target="_blank" rel="noreferrer">
-                  <div className="news-meta">
-                    {n.source || "Source"} · {new Date((n.datetime || 0) * 1000).toLocaleString()}
+        {/* SNAPSHOT */}
+        {tab === "snapshot" && (
+          <section className="grid">
+            <div className="panel" style={{ gridColumn: "span 7" }}>
+              <div className="card-title">Company Overview</div>
+              {!profile ? (
+                <div className="muted">Search a symbol above to begin your analysis.</div>
+              ) : (
+                <div className="stack">
+                  <div style={{ fontWeight: 800, fontSize: 20 }}>{profile.name}</div>
+                  <div className="muted">{profile.exchange} • {profile.currency}</div>
+                  {quote && (
+                    <div style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
+                      <div style={{ fontSize: 32, fontWeight: 900 }}>${quote.c?.toFixed(2)}</div>
+                      <div className={quote.d >= 0 ? "pill pill-pos" : "pill pill-neg"}>
+                        {quote.d >= 0 ? "▲" : "▼"} {quote.dp?.toFixed(2)}%
+                      </div>
+                    </div>
+                  )}
+                  <div className="stack" style={{ gap: 8 }}>
+                    <div className="pill pill-mid">Market Cap: {profile.marketCapitalization ? `$${profile.marketCapitalization.toLocaleString()}M` : "—"}</div>
+                    <div className="pill pill-mid">IPO: {profile.ipo || "—"}</div>
+                    <div className="pill pill-mid">Country: {profile.country || "—"}</div>
                   </div>
-                  <div className="news-title">{n.headline}</div>
-                  <div className="news-snippet">{n.summary}</div>
-                </a>
-              ))}
+                </div>
+              )}
             </div>
-          )}
-        </section>
+
+            <div className="panel" style={{ gridColumn: "span 5" }}>
+              <div className="card-title">Analyst Consensus</div>
+              {!consensus || !consensus.summary ? (
+                <div className="muted">Run Analyze to fetch consensus.</div>
+              ) : (
+                <div className="stack">
+                  <div style={{ fontSize: 22, fontWeight: 900 }}>{consensusLabel(consensus.summary)}</div>
+                  <div>
+                    <Pill type="pos">Strong Buy {consensus.summary.strongBuy || 0}</Pill>
+                    <Pill type="pos">Buy {consensus.summary.buy || 0}</Pill>
+                    <Pill type="mid">Hold {consensus.summary.hold || 0}</Pill>
+                    <Pill type="neg">Sell {consensus.summary.sell || 0}</Pill>
+                    <Pill type="neg">Strong Sell {consensus.summary.strongSell || 0}</Pill>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {consensus.latest?.period ? `Period: ${consensus.latest.period}` : null} • Data via Finnhub
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Top Market News */}
+            <div className="panel" style={{ gridColumn: "span 12" }}>
+              <div className="card-title">Top Market News — Global</div>
+              <div className="newslist">
+                {marketNews.map((n) => (
+                  <div key={`${n.id || n.datetime}-${n.headline}`} className="news-item">
+                    <div className="news-head">
+                      <span>{n.source}</span>
+                      <span>•</span>
+                      <span>{new Date((n.datetime || 0) * 1000).toLocaleString()}</span>
+                    </div>
+                    <div className="news-title">{n.headline}</div>
+                    <a className="news-link" href={n.url} target="_blank" rel="noreferrer">Read ➔</a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* NEWS */}
+        {tab === "news" && (
+          <section className="panel">
+            <div className="card-title">Company News</div>
+            {companyNews.length === 0 ? (
+              <div className="muted">Search a symbol, then open News.</div>
+            ) : (
+              <div className="newslist">
+                {companyNews.map((n) => (
+                  <div key={`${n.id || n.datetime}-${n.headline}`} className="news-item">
+                    <div className="news-head">
+                      <span>{n.source}</span>
+                      <span>•</span>
+                      <span>{new Date((n.datetime || 0) * 1000).toLocaleString()}</span>
+                    </div>
+                    <div className="news-title">{n.headline}</div>
+                    <a className="news-link" href={n.url} target="_blank" rel="noreferrer">Open ➔</a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* SENTIMENT (consensus again – place for future social sentiment) */}
+        {tab === "sentiment" && (
+          <section className="panel">
+            <div className="card-title">Analyst Consensus</div>
+            {!consensus || !consensus.summary ? (
+              <div className="muted">Run Analyze to fetch consensus.</div>
+            ) : (
+              <div className="stack">
+                <div style={{ fontSize: 22, fontWeight: 900 }}>{consensusLabel(consensus.summary)}</div>
+                <div>
+                  <Pill type="pos">Strong Buy {consensus.summary.strongBuy || 0}</Pill>
+                  <Pill type="pos">Buy {consensus.summary.buy || 0}</Pill>
+                  <Pill type="mid">Hold {consensus.summary.hold || 0}</Pill>
+                  <Pill type="neg">Sell {consensus.summary.sell || 0}</Pill>
+                  <Pill type="neg">Strong Sell {consensus.summary.strongSell || 0}</Pill>
+                </div>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  {consensus.latest?.period ? `Period: ${consensus.latest.period}` : null} • Data via Finnhub
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* EVENTS placeholder (room for earnings/dividends etc.) */}
+        {tab === "events" && (
+          <section className="panel">
+            <div className="card-title">Events</div>
+            <div className="muted">Coming soon: earnings, dividends & economic calendar.</div>
+          </section>
+        )}
+
+        <footer className="footer">
+          CandL — a William Popoola project • © {new Date().getFullYear()}
+        </footer>
       </main>
 
-      <Footer openAbout={() => setAboutOpen(true)} openContact={() => setContactOpen(true)} />
+      {/* ABOUT MODAL */}
+      {showAbout && (
+        <div className="modal-backdrop" onClick={() => setShowAbout(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div style={{ fontWeight: 900, fontSize: 18 }}>About CandL</div>
+              <button className="close" onClick={() => setShowAbout(false)}>Close</button>
+            </div>
+            <div className="stack">
+              <p><strong>CandL</strong> is a lightweight stock analyser with a premium feel: frosted-glass UI, fast interactions, and clean data presentation.</p>
+              <p>Key features include: live quotes, company profile, curated market headlines, and analyst consensus (via serverless API).</p>
+              <p>Built by William Popoola. PWA install, dark/light mode, and accessibility baked in.</p>
+            </div>
+          </div>
+        </div>
+      )}
 
-      {/* Modals */}
-      <Modal open={aboutOpen} onClose={() => setAboutOpen(false)} title="About CandL">
-        <p><strong>CandL</strong> is a mobile-first stock analyser focused on clarity, speed, and accessibility.</p>
-        <p>Enter a supported ticker to see a real-time snapshot, sentiment mix from recent news, and curated headlines.
-           Use the tabs to switch views. Theme toggle adapts the UI and the market tape.</p>
-        <p>Share links like <code>?s=AAPL</code> to open directly. Your API key is stored securely as an environment variable.</p>
-        <p className="muted">Design: frosted glass panels over a calm animated canvas; compact controls and readable type for small screens.</p>
-      </Modal>
-
-      <Modal open={contactOpen} onClose={() => setContactOpen(false)} title="Contact the Developer">
-        <ul className="list">
-          <li>📧 <a href="mailto:itzarishe@gmail.com">itzarishe@gmail.com</a></li>
-          <li>📞 <a href="tel:+2347071703030">+234 707 170 3030</a></li>
-          <li>📷 <a href="https://instagram.com/arisheoluwa" target="_blank" rel="noreferrer">@arisheoluwa</a></li>
-          <li>𝕏 <a href="https://x.com/arisheoluwa" target="_blank" rel="noreferrer">@arisheoluwa</a></li>
-          <li>💼 <a href="https://www.linkedin.com/in/william-popoola/" target="_blank" rel="noreferrer">LinkedIn — William Popoola</a></li>
-        </ul>
-      </Modal>
-
-      <Modal open={tipsOpen} onClose={() => setTipsOpen(false)} title="Quick Tips">
-        <ul className="list">
-          <li>Type a ticker (e.g., <code>AAPL</code>) → <strong>Analyze</strong>.</li>
-          <li>Tabs: <strong>Snapshot</strong>, <strong>News</strong>, <strong>Sentiment</strong>, <strong>Events</strong>.</li>
-          <li>Switch themes with ☀️/🌙 — the market tape follows.</li>
-          <li>Share <code>?s=NVDA</code> to open directly.</li>
-        </ul>
-      </Modal>
-    </>
+      {/* CONTACT MODAL */}
+      {showContact && (
+        <div className="modal-backdrop" onClick={() => setShowContact(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div style={{ fontWeight: 900, fontSize: 18 }}>Contact the Developer</div>
+              <button className="close" onClick={() => setShowContact(false)}>Close</button>
+            </div>
+            <div className="stack">
+              <div className="card">
+                <div>Email: <a className="news-link" href="mailto:itzarishe@gmail.com">itzarishe@gmail.com</a></div>
+                <div>Phone: <a className="news-link" href="tel:+2347071703030">+234 707 170 3030</a></div>
+                <div>Instagram: <a className="news-link" target="_blank" rel="noreferrer" href="https://instagram.com/arisheoluwa">@arisheoluwa</a></div>
+                <div>X: <a className="news-link" target="_blank" rel="noreferrer" href="https://x.com/arisheoluwa">@arisheoluwa</a></div>
+                <div>LinkedIn: <a className="news-link" target="_blank" rel="noreferrer" href="https://www.linkedin.com/in/william-popoola/">/in/william-popoola/</a></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
